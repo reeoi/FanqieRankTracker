@@ -420,8 +420,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderMarkdown(text) {
         let html = escapeHtml(text);
         // Headers: ### h3, ## h2 (rare in summaries but support it)
-        html = html.replace(/^### (.+)$/gm, '<strong style="font-size:0.95rem">$1</strong>');
-        html = html.replace(/^## (.+)$/gm, '<strong style="font-size:1rem">$1</strong>');
+        html = html.replace(/^### (.+)$/gm, '<h3 style="font-size:1.05rem; margin:1em 0 0.5em; color:var(--text-primary);">$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2 style="font-size:1.15rem; margin:1em 0 0.5em; color:var(--text-primary);">$1</h2>');
         // Bold: **text**
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         // Italic: *text*
