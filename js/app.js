@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function copyBookInfo(e, book) {
         e.preventDefault();
         e.stopPropagation();
-        const text = `${book.title}\n作者：${book.author}\n阅读量：${book.reads}\n链接：${book.url || '无'}`;
+        const text = `${book.title}\n作者：${book.author}\n阅读量：${book.reads}\n简介：${book.intro || '无'}\n链接：${book.url || '无'}`;
         navigator.clipboard.writeText(text).then(() => {
             const btn = e.currentTarget;
             btn.classList.add('copied');
