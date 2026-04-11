@@ -8,9 +8,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const trendPanel = document.getElementById('trend-panel');
     const mobileMenuBtn = document.getElementById('mobile-menu-btn');
     const sidebar = document.getElementById('sidebar');
+    const dateDisplay = document.getElementById('date-display');
+    const datePickerBtn = document.getElementById('date-picker-btn');
+    const dateInput = document.getElementById('date-input');
+    const datePrevBtn = document.getElementById('date-prev');
+    const dateNextBtn = document.getElementById('date-next');
 
     let allData = null;
     let typingTimer = null;
+    let availableDates = [];   // sorted list of "YYYY-MM-DD"
+    let currentDateIndex = -1; // index into availableDates
+    let currentCategory = null; // preserve selected category across date switches
 
     // ========== Copy Toast ==========
     const copyToast = document.createElement('div');
@@ -67,25 +75,235 @@ document.addEventListener('DOMContentLoaded', () => {
         overlay.classList.remove('show');
     });
 
-    // ========== Load Data ==========
-    fetch('data/latest_ranks.json')
-        .then(r => {
-            if (!r.ok) throw new Error('Network error');
-            return r.json();
-        })
-        .then(data => {
-            allData = data;
-            const prevInfo = data.prev_date ? ` (对比 ${data.prev_date})` : '';
-            updateDate.textContent = `${data.date}${prevInfo}`;
-            renderCategories();
-            if (data.categories.length > 0) {
-                selectCategory(data.categories[0].name);
+    // ========== Date Navigation ==========
+    function updateDateNav() {
+        const isLatest = currentDateIndex === availableDates.length - 1;
+        const isFirst = currentDateIndex <= 0;
+
+        datePrevBtn.disabled = isFirst;
+        dateNextBtn.disabled = isLatest;
+
+        const currentDate = availableDates[currentDateIndex];
+        dateDisplay.textContent = currentDate || '加载中...';
+
+        // Highlight if viewing historical (non-latest) data
+        if (isLatest) {
+            datePickerBtn.classList.remove('is-historical');
+        } else {
+            datePickerBtn.classList.add('is-historical');
+        }
+
+        // Sync preset button active state
+        updatePresetButtons();
+    }
+
+    // ========== Preset Buttons ==========
+    const presetBtns = document.querySelectorAll('.preset-btn');
+
+    function updatePresetButtons() {
+        const isLatest = currentDateIndex === availableDates.length - 1;
+        const isYesterday = availableDates.length >= 2 && currentDateIndex === availableDates.length - 2;
+
+        presetBtns.forEach(btn => {
+            const preset = btn.dataset.preset;
+            if (preset === 'latest' && isLatest) {
+                btn.classList.add('active');
+            } else if (preset === 'yesterday' && isYesterday) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
             }
-        })
-        .catch(err => {
-            console.error(err);
-            waterfall.innerHTML = '<p style="color:#f87171;padding:20px;">数据加载失败，请刷新重试。</p>';
         });
+    }
+
+    presetBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const preset = btn.dataset.preset;
+            if (preset === 'latest' && availableDates.length > 0) {
+                currentDateIndex = availableDates.length - 1;
+                loadDateData(availableDates[currentDateIndex]);
+            } else if (preset === 'yesterday' && availableDates.length >= 2) {
+                currentDateIndex = availableDates.length - 2;
+                loadDateData(availableDates[currentDateIndex]);
+            }
+        });
+    });
+
+    datePrevBtn.addEventListener('click', () => {
+        if (currentDateIndex > 0) {
+            currentDateIndex--;
+            loadDateData(availableDates[currentDateIndex]);
+        }
+    });
+
+    dateNextBtn.addEventListener('click', () => {
+        if (currentDateIndex < availableDates.length - 1) {
+            currentDateIndex++;
+            loadDateData(availableDates[currentDateIndex]);
+        }
+    });
+
+    datePickerBtn.addEventListener('click', () => {
+        // Trigger native date picker
+        dateInput.showPicker ? dateInput.showPicker() : dateInput.click();
+    });
+
+    dateInput.addEventListener('change', () => {
+        const selected = dateInput.value; // YYYY-MM-DD
+        if (!selected) return;
+        const idx = availableDates.indexOf(selected);
+        if (idx !== -1) {
+            currentDateIndex = idx;
+            loadDateData(selected);
+        } else {
+            // Find nearest available date and show friendly hint
+            const nearest = availableDates.reduce((prev, curr) =>
+                Math.abs(new Date(curr) - new Date(selected)) < Math.abs(new Date(prev) - new Date(selected)) ? curr : prev
+            );
+            const nearIdx = availableDates.indexOf(nearest);
+            currentDateIndex = nearIdx;
+            loadDateData(nearest);
+            showToast(`${selected} 无数据，已跳转至最近的 ${nearest}`);
+        }
+    });
+
+    // ========== Load dates index, then load latest ==========
+    fetch('data/dates.json')
+        .then(r => r.ok ? r.json() : Promise.reject('No dates.json'))
+        .then(idx => {
+            availableDates = idx.dates || [];
+            if (availableDates.length > 0) {
+                // Set min/max for native date input
+                dateInput.min = availableDates[0];
+                dateInput.max = availableDates[availableDates.length - 1];
+            }
+            // Start by loading latest_ranks.json (already has trend data baked in)
+            return loadLatestData();
+        })
+        .catch(() => {
+            // Fallback: no dates.json available, just load latest
+            console.warn('dates.json not found, falling back to latest only');
+            loadLatestData();
+        });
+
+    function loadLatestData() {
+        return fetch('data/latest_ranks.json')
+            .then(r => {
+                if (!r.ok) throw new Error('Network error');
+                return r.json();
+            })
+            .then(data => {
+                allData = data;
+                // Set current index from dates list
+                const latestDate = data.date;
+                currentDateIndex = availableDates.indexOf(latestDate);
+                if (currentDateIndex === -1) {
+                    // Date might not be in index yet (e.g., dates.json not regenerated)
+                    availableDates.push(latestDate);
+                    availableDates.sort();
+                    currentDateIndex = availableDates.indexOf(latestDate);
+                }
+                applyData(data);
+            })
+            .catch(err => {
+                console.error(err);
+                waterfall.innerHTML = '<p style="color:#f87171;padding:20px;">数据加载失败，请刷新重试。</p>';
+            });
+    }
+
+    function loadDateData(dateStr) {
+        // dateStr = "YYYY-MM-DD", file = fanqie_female_new_ranks_YYYYMMDD.json
+        const fileDateStr = dateStr.replace(/-/g, '');
+        const isLatest = currentDateIndex === availableDates.length - 1;
+
+        if (isLatest) {
+            // Just load the pre-built latest with trends
+            loadLatestData();
+            return;
+        }
+
+        // Show loading state
+        waterfall.innerHTML = '<p style="color:var(--text-muted);padding:20px;">加载中...</p>';
+
+        const snapshotUrl = `data/fanqie_female_new_ranks_${fileDateStr}.json`;
+        const trendUrl = `data/trends/${dateStr}.json`;
+
+        // Load snapshot + trends in parallel
+        Promise.all([
+            fetch(snapshotUrl).then(r => r.ok ? r.json() : Promise.reject('No snapshot')),
+            fetch(trendUrl).then(r => r.ok ? r.json() : null).catch(() => null)
+        ]).then(([snapshot, trendData]) => {
+            // Build a data object in the same shape as latest_ranks.json
+            const combined = {
+                date: snapshot.date,
+                prev_date: trendData ? trendData.prev_date : '',
+                categories: snapshot.categories.map(cat => ({
+                    name: cat.name,
+                    trend: trendData && trendData.trends ? (trendData.trends[cat.name] || {}) : {},
+                    books: cat.books || []
+                }))
+            };
+            allData = combined;
+            applyData(combined);
+        }).catch(err => {
+            console.error('Failed to load historical data:', err);
+            const dateStr = availableDates[currentDateIndex];
+            // Friendly no-data handler: auto-jump to nearest date
+            const nearest = findNearestAvailableDate(dateStr);
+            if (nearest && nearest !== dateStr) {
+                showToast(`${dateStr} 数据不可用，已跳转至 ${nearest}`);
+                currentDateIndex = availableDates.indexOf(nearest);
+                loadDateData(nearest);
+            } else {
+                waterfall.innerHTML = `<div class="empty-state">
+                    <p>📭 该日期（${dateStr}）暂无数据</p>
+                    <p class="empty-hint">可尝试切换到其他日期查看</p>
+                </div>`;
+                updateDateNav();
+            }
+        });
+    }
+
+    function findNearestAvailableDate(targetDate) {
+        // Try nearby dates, preferring the latest
+        if (availableDates.length === 0) return null;
+        return availableDates.reduce((prev, curr) =>
+            Math.abs(new Date(curr) - new Date(targetDate)) < Math.abs(new Date(prev) - new Date(targetDate)) ? curr : prev
+        );
+    }
+
+    // ========== General Toast ==========
+    function showToast(msg) {
+        copyToast.textContent = msg;
+        if (toastTimer) clearTimeout(toastTimer);
+        copyToast.classList.add('show');
+        toastTimer = setTimeout(() => {
+            copyToast.classList.remove('show');
+            copyToast.textContent = '✅ 书本信息已复制';
+        }, 2500);
+    }
+
+    function applyData(data) {
+        const prevInfo = data.prev_date ? ` (对比 ${data.prev_date})` : '';
+        updateDate.textContent = `${data.date}${prevInfo}`;
+        updateDateNav();
+
+        // Remember current category before re-rendering
+        const savedCategory = currentCategory;
+        renderCategories();
+
+        // Try to restore previously selected category, otherwise pick first
+        const categoryExists = savedCategory && data.categories.some(c => c.name === savedCategory);
+        if (categoryExists) {
+            selectCategory(savedCategory);
+            // Also update sidebar active state
+            document.querySelectorAll('#category-list li').forEach(el => {
+                el.classList.toggle('active', el.dataset.category === savedCategory);
+            });
+        } else if (data.categories.length > 0) {
+            selectCategory(data.categories[0].name);
+        }
+    }
 
     // ========== Render sidebar categories ==========
     function renderCategories() {
@@ -107,7 +325,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 li.appendChild(badge);
             }
 
-            if (i === 0) li.classList.add('active');
+            // Mark active: either the saved category or first item
+            if ((currentCategory && cat.name === currentCategory) || (!currentCategory && i === 0)) {
+                li.classList.add('active');
+            }
 
             li.addEventListener('click', () => {
                 document.querySelectorAll('#category-list li').forEach(el => el.classList.remove('active'));
@@ -124,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ========== Select a category ==========
     function selectCategory(categoryName) {
+        currentCategory = categoryName; // persist selection
         categoryTitle.textContent = categoryName;
         const cat = allData.categories.find(c => c.name === categoryName);
         if (!cat) return;

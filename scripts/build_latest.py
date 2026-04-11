@@ -312,6 +312,19 @@ def main():
         json.dump(trend_output, f, ensure_ascii=False, indent=2)
     print(f"✅ 趋势存档: {trend_path}")
 
+    # 生成 dates.json 索引（供前端历史日期选择器使用）
+    date_list = []
+    for s in snapshots:
+        fname = os.path.basename(s)
+        # fanqie_female_new_ranks_YYYYMMDD.json -> YYYY-MM-DD
+        m = re.search(r"(\d{4})(\d{2})(\d{2})", fname)
+        if m:
+            date_list.append(f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+    dates_path = os.path.join(data_dir, "dates.json")
+    with open(dates_path, "w", encoding="utf-8") as f:
+        json.dump({"dates": sorted(date_list)}, f, ensure_ascii=False, indent=2)
+    print(f"✅ 日期索引: {dates_path} ({len(date_list)} 个日期)")
+
 
 if __name__ == "__main__":
     main()

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>番茄女频新书榜 · 风向标</title>
+    <title>番茄女频新书榜 · 风向标 | 每日女频趋势追踪</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;0,900;1,400&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
@@ -16,6 +16,7 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h1>🏆 番茄风向标</h1>
+                <p class="sidebar-subtitle">👗 女频新书榜追踪</p>
                 <p id="update-date" class="update-date">加载中...</p>
             </div>
             <nav class="category-nav">
@@ -28,9 +29,26 @@
         <!-- 主内容区 -->
         <main class="main-content">
             <header class="main-header">
-                <h2 id="current-category-title">全部分类</h2>
-                <!-- 移动端菜单按钮 -->
-                <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="菜单">☰</button>
+                <div class="header-left">
+                    <h2 id="current-category-title">全部分类</h2>
+                </div>
+                <div class="header-right">
+                    <div class="date-presets" id="date-presets">
+                        <button class="preset-btn active" data-preset="latest">最新</button>
+                        <button class="preset-btn" data-preset="yesterday">昨日</button>
+                    </div>
+                    <div class="date-picker-wrap">
+                        <button class="date-nav-btn" id="date-prev" aria-label="前一天" title="前一天">◀</button>
+                        <button class="date-picker-btn" id="date-picker-btn">
+                            <span class="date-icon">📅</span>
+                            <span id="date-display">加载中...</span>
+                        </button>
+                        <button class="date-nav-btn" id="date-next" aria-label="后一天" title="后一天">▶</button>
+                        <input type="date" id="date-input" class="date-input-hidden">
+                    </div>
+                    <!-- 移动端菜单按钮 -->
+                    <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="菜单">☰</button>
+                </div>
             </header>
 
             <!-- 风向标区域 -->
