@@ -216,6 +216,119 @@ def build_ai_prompt(cat_name: str, cat: dict, trend: dict) -> str:
 要求：每个板块2-3句话，总字数250字以内。语言简洁专业，像行业快报。"""
 
 
+BATCH_SIZE = 3  # 每批合并的分类数
+
+
+def build_batch_ai_prompt(batch: list) -> str:
+    """构建批量 AI 总结的 prompt。
+
+    batch: list of (cat_name, cat_data, trend_data) tuples
+    """
+    sections = []
+    for cat_name, cat, trend in batch:
+        intros = []
+        for i, book in enumerate(cat.get("books", [])[:20]):
+            intros.append(
+                f"{i+1}. 《{book['title']}》- {book.get('author', '未知')}\n"
+                f"   在读：{book.get('reads', '未知')}\n"
+                f"   简介：{book.get('intro', '无')[:200]}"
+            )
+        intros_text = "\n".join(intros)
+
+        new_books = trend.get("new_books", [])
+        new_text = "、".join(f"《{t}》" for t in new_books) if new_books else "无"
+
+        dropped = trend.get("dropped_books", [])
+        if dropped:
+            dropped_lines = []
+            for d in dropped:
+                if isinstance(d, dict):
+                    dropped_lines.append(
+                        f"《{d['title']}》（{d.get('intro', '暂无简介')[:50]}）"
+                    )
+                else:
+                    dropped_lines.append(f"《{d}》")
+            dropped_text = "、".join(dropped_lines)
+        else:
+            dropped_text = "无"
+
+        risers = trend.get("top_risers", [])
+        risers_text = (
+            "、".join(f"《{r['title']}》{r['change']}" for r in risers)
+            if risers else "无"
+        )
+        fallers = trend.get("top_fallers", [])
+        fallers_text = (
+            "、".join(f"《{f['title']}》{f['change']}" for f in fallers)
+            if fallers else "无"
+        )
+
+        sections.append(
+            f"### 分类：{cat_name}\n\n"
+            f"**当前榜单 Top 20：**\n{intros_text}\n\n"
+            f"**榜单变动：**\n"
+            f"- 新上榜：{new_text}\n"
+            f"- 掉出榜单：{dropped_text}\n"
+            f"- 排名上升：{risers_text}\n"
+            f"- 排名下降：{fallers_text}"
+        )
+
+    all_sections = "\n\n---\n\n".join(sections)
+    cat_names = [b[0] for b in batch]
+
+    output_examples = "\n\n".join(
+        f"===BEGIN: {name}===\n"
+        f"**🔥 题材趋势** ...\n"
+        f"**📖 读者偏好** ...\n"
+        f"**🆕 新上榜作品** ...\n"
+        f"**📉 掉出榜单** ...\n"
+        f"**💡 值得关注** ...\n"
+        f"===END: {name}==="
+        for name in cat_names
+    )
+
+    return (
+        f"你是一位网文行业分析师。请根据以下数据，"
+        f"为番茄小说的多个分类新书榜分别生成结构化分析。\n\n"
+        f"{all_sections}\n\n"
+        f"## 输出要求\n\n"
+        f"请严格按照以下格式，为每个分类分别输出分析。"
+        f"每个分类的分析必须包裹在对应的标记中：\n\n"
+        f"{output_examples}\n\n"
+        f"每个板块2-3句话，每个分类总字数250字以内。"
+        f"语言简洁专业，像行业快报。\n"
+        f"注意：必须为每个分类都输出完整分析，不可省略任何分类。"
+    )
+
+
+def parse_batch_response(response_text: str, cat_names: list) -> dict:
+    """解析批量 AI 响应，返回 {cat_name: summary} 字典。"""
+    results = {}
+    for name in cat_names:
+        pattern = rf"===BEGIN:\s*{re.escape(name)}\s*===(.*?)===END:\s*{re.escape(name)}\s*==="
+        match = re.search(pattern, response_text, re.DOTALL)
+        if match:
+            summary = match.group(1).strip()
+            if summary:
+                results[name] = summary
+    return results
+
+
+def _save_trends_incremental(trend_path: str, date: str,
+                             prev_date: str, trends: dict):
+    """增量保存趋势数据到文件（每批成功后立即写入）。"""
+    if not trend_path:
+        return
+    trend_output = {
+        "date": date,
+        "prev_date": prev_date,
+        "trends": trends,
+    }
+    with open(trend_path, "w", encoding="utf-8") as f:
+        json.dump(trend_output, f, ensure_ascii=False, indent=2)
+
+
+
 def is_rule_summary(summary: str) -> bool:
     """判断一个总结是否为规则模板生成的（非 AI）。
     规则摘要特征：短小、分号分隔、以句号结尾、无换行。
@@ -233,10 +346,15 @@ def is_rule_summary(summary: str) -> bool:
 def generate_ai_summaries(categories: list, trends: dict,
                           api_key: str, base_url: str,
                           model: str, force: bool = False,
-                          existing_trends: dict = None) -> dict:
+                          existing_trends: dict = None,
+                          trend_path: str = None,
+                          trend_date: str = "",
+                          prev_date: str = "") -> dict:
     """通过 OpenAI 兼容 API 为每个分类生成 AI 总结。
 
-    如果 force=False，会跳过已有 AI 总结的分类（仅补缺）。
+    采用批量合并策略（每 BATCH_SIZE 个分类一次调用）减少 API 调用次数，
+    并在每批成功后增量保存，避免中途失败丢失已完成的结果。
+    批量失败的分类会自动降级为逐个重试。
     """
     try:
         from openai import OpenAI
@@ -244,16 +362,18 @@ def generate_ai_summaries(categories: list, trends: dict,
         print("⚠️  openai 库未安装，跳过 AI 总结。pip install openai")
         return trends
 
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=60.0)
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
     existing_trends = existing_trends or {}
 
+    # 1. 筛选需要生成总结的分类
+    pending = []  # (cat_name, cat_data, trend_data)
     skipped = 0
+
     for cat in categories:
         cat_name = cat["name"]
         if cat_name not in trends:
             continue
 
-        # 检查是否已有 AI 总结（非规则模板）
         if not force:
             existing_summary = existing_trends.get(cat_name, {}).get("summary", "")
             if existing_summary and not is_rule_summary(existing_summary):
@@ -261,46 +381,123 @@ def generate_ai_summaries(categories: list, trends: dict,
                 skipped += 1
                 continue
 
-        trend = trends[cat_name]
-        prompt = build_ai_prompt(cat_name, cat, trend)
+        pending.append((cat_name, cat, trends[cat_name]))
+
+    if skipped > 0:
+        print(f"  ⏭️  跳过 {skipped} 个已有 AI 总结的分类")
+
+    if not pending:
+        print("  ✅ 所有分类已有 AI 总结，无需生成")
+        return trends
+
+    # 2. 分批处理
+    batches = [
+        pending[i:i + BATCH_SIZE]
+        for i in range(0, len(pending), BATCH_SIZE)
+    ]
+    failed_cats = []  # 批量失败后需单独重试的分类
+
+    print(f"  📦 共 {len(pending)} 个分类，分 {len(batches)} 批处理"
+          f"（每批最多 {BATCH_SIZE} 个）")
+
+    for batch_idx, batch in enumerate(batches):
+        batch_names = [b[0] for b in batch]
+        print(f"\n  📦 第 {batch_idx + 1}/{len(batches)} 批: "
+              f"{', '.join(batch_names)}")
+
+        prompt = build_batch_ai_prompt(batch)
 
         max_retries = 3
-        success = False
+        batch_success = False
         for attempt in range(1, max_retries + 1):
             try:
                 response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=500,
+                    max_tokens=500 * len(batch),
                     temperature=0.7,
                 )
                 content = response.choices[0].message.content
                 if not content or not content.strip():
                     raise ValueError("API 返回空内容")
-                trends[cat_name]["summary"] = content.strip()
-                print(f"  ✅ AI 总结: {cat_name}")
-                success = True
-                break
+
+                # 解析批量响应
+                parsed = parse_batch_response(content, batch_names)
+
+                if parsed:
+                    for name, summary in parsed.items():
+                        trends[name]["summary"] = summary
+                        print(f"    ✅ {name}")
+
+                    # 未解析出的分类加入失败队列
+                    for name in batch_names:
+                        if name not in parsed:
+                            print(f"    ⚠️  未解析到: {name}（将单独重试）")
+                            failed_cats.append(
+                                next(b for b in batch if b[0] == name)
+                            )
+
+                    # 增量保存
+                    _save_trends_incremental(
+                        trend_path, trend_date, prev_date, trends
+                    )
+                    batch_success = True
+                    break
+                else:
+                    raise ValueError("批量响应解析失败，未匹配到任何分类")
+
             except Exception as e:
-                print(f"  ⚠️  AI 总结第{attempt}次失败 {cat_name}: {e}")
+                print(f"    ⚠️  第 {attempt} 次失败: {e}")
                 if attempt < max_retries:
                     import time
-                    time.sleep(5 * attempt)  # 5s, 10s 递增等待
+                    time.sleep(5 * attempt)
 
-        if not success:
-            print(f"  ❌ AI 总结最终失败 {cat_name}（已重试{max_retries}次）")
-            # 尝试保留旧的 AI 总结
-            old = existing_trends.get(cat_name, {}).get("summary", "")
-            if old and not is_rule_summary(old):
-                trends[cat_name]["summary"] = old
-                print(f"  ↩️  保留旧 AI 总结: {cat_name}")
-            else:
-                trends[cat_name]["summary"] = generate_trend_summary_text(
-                    cat_name, trend
-                )
+        if not batch_success:
+            print(f"    ❌ 批量生成失败（已重试 {max_retries} 次），"
+                  f"将逐个重试")
+            failed_cats.extend(batch)
 
-    if skipped > 0:
-        print(f"  ⏭️  跳过 {skipped} 个已有 AI 总结的分类")
+    # 3. 对失败的分类逐个重试（降级为单分类 prompt）
+    if failed_cats:
+        print(f"\n  🔄 逐个重试 {len(failed_cats)} 个失败分类...")
+        for cat_name, cat, trend in failed_cats:
+            prompt = build_ai_prompt(cat_name, cat, trend)
+            max_retries = 3
+            success = False
+            for attempt in range(1, max_retries + 1):
+                try:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=500,
+                        temperature=0.7,
+                    )
+                    content = response.choices[0].message.content
+                    if not content or not content.strip():
+                        raise ValueError("API 返回空内容")
+                    trends[cat_name]["summary"] = content.strip()
+                    print(f"    ✅ {cat_name}")
+                    _save_trends_incremental(
+                        trend_path, trend_date, prev_date, trends
+                    )
+                    success = True
+                    break
+                except Exception as e:
+                    print(f"    ⚠️  {cat_name} 第 {attempt} 次失败: {e}")
+                    if attempt < max_retries:
+                        import time
+                        time.sleep(5 * attempt)
+
+            if not success:
+                print(f"    ❌ {cat_name} 最终失败")
+                old = existing_trends.get(cat_name, {}).get("summary", "")
+                if old and not is_rule_summary(old):
+                    trends[cat_name]["summary"] = old
+                    print(f"    ↩️  保留旧 AI 总结: {cat_name}")
+                else:
+                    trends[cat_name]["summary"] = generate_trend_summary_text(
+                        cat_name, trend
+                    )
 
     return trends
 
@@ -406,7 +603,10 @@ def main():
             latest_data["categories"], trends,
             api_key, api_base_url, api_model,
             force=args.force,
-            existing_trends=existing_trends
+            existing_trends=existing_trends,
+            trend_path=trend_path,
+            trend_date=latest_data["date"],
+            prev_date=prev_date
         )
     else:
         missing = [k for k, v in {"API_BASE_URL": api_base_url, "API_KEY": api_key, "API_MODEL": api_model}.items() if not v]
