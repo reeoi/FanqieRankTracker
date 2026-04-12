@@ -20,6 +20,9 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentDateIndex = -1; // index into availableDates
     let currentCategory = null; // preserve selected category across date switches
 
+    // Cache-busting: 每10分钟一个新key，避免浏览器缓存旧JSON
+    const cacheBuster = `v=${Math.floor(Date.now() / 600000)}`;
+
     // ========== Copy Toast ==========
     const copyToast = document.createElement('div');
     copyToast.className = 'copy-toast';
@@ -168,7 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ========== Load dates index, then load latest ==========
-    fetch('data/dates.json')
+    fetch(`data/dates.json?${cacheBuster}`)
         .then(r => r.ok ? r.json() : Promise.reject('No dates.json'))
         .then(idx => {
             availableDates = idx.dates || [];
@@ -187,7 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
     function loadLatestData() {
-        return fetch('data/latest_ranks.json')
+        return fetch(`data/latest_ranks.json?${cacheBuster}`)
             .then(r => {
                 if (!r.ok) throw new Error('Network error');
                 return r.json();
@@ -225,8 +228,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // Show loading state
         waterfall.innerHTML = '<p style="color:var(--text-muted);padding:20px;">加载中...</p>';
 
-        const snapshotUrl = `data/fanqie_female_new_ranks_${fileDateStr}.json`;
-        const trendUrl = `data/trends/${dateStr}.json`;
+        const snapshotUrl = `data/fanqie_female_new_ranks_${fileDateStr}.json?${cacheBuster}`;
+        const trendUrl = `data/trends/${dateStr}.json?${cacheBuster}`;
 
         // Load snapshot + trends in parallel
         Promise.all([
